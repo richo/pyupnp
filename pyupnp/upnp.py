@@ -31,6 +31,7 @@ import time
 from cStringIO import StringIO
 from xml.etree import ElementTree as ET
 from httplib import HTTPMessage
+from random import random
 
 from twisted.internet import error
 from twisted.internet.udp import MulticastPort
@@ -50,11 +51,11 @@ __all__ = [
     'UpnpNamespace',
     'UpnpDevice',
     'UpnpBase',
-    'SoapRequest',
-    'SoapResponse',
-    'xml_tostring'
-    'make_gmt'
-    'not_found'
+    'SoapMessage',
+    'xml_tostring',
+    'make_gmt',
+    'not_found',
+    'ns',
 ]
 
 
@@ -103,11 +104,22 @@ def make_gmt():
     return time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())
 
 def not_found(environ, start_response):
-    start_response('404 Not Found', [('Content-type', 'text/plain')])
+    headers = [
+        ('DATE', make_gmt()),
+        ('Content-type', 'text/plain'),
+        ('Connection', 'close'),
+    ]
+    start_response('404 Not Found', headers)
     return ['Not Found']
 
+def build_packet(first_line, packet):
+    buff = first_line + '\r\n'
+    buff += '\r\n'.join([k + ': ' + v for k, v in packet])
+    buff += '\r\n\r\n'
+    return buff
+
 def xml_tostring(elem, encoding='utf-8', xml_decl=None, default_ns=None):
-    class dummy:
+    class dummy(object):
         pass
     data = []
     fileobj = dummy()
@@ -117,9 +129,9 @@ def xml_tostring(elem, encoding='utf-8', xml_decl=None, default_ns=None):
         ET.ElementTree(elem).write(fileobj, encoding, xml_decl, default_ns)
     else:
         def _write(o):
-            #l = (o, ('<tmp:', '<'), ('</tmp:', '</'), ('xmlns:tmp=', 'xmlns='))
-            #o = reduce(lambda s, (f, t): s.replace(f, t), l)
-            o = o.replace('<tmp:', '<').replace('</tmp:', '</').replace('xmlns:tmp=', 'xmlns=')
+            # workaround
+            l = (o, ('<tmp:', '<'), ('</tmp:', '</'), (' tmp:', ' '), ('xmlns:tmp=', 'xmlns='))
+            o = reduce(lambda s, (f, t): s.replace(f, t), l)
             data.append(o)
         fileobj.write = _write
         if xml_decl or encoding not in ('utf-8', 'us-ascii'):
@@ -130,49 +142,10 @@ def xml_tostring(elem, encoding='utf-8', xml_decl=None, default_ns=None):
     return "".join(data)
 
 
-class SoapMixin(object):
+class SoapMessage(object):
     """
-    This mixin requires the follwing members:
-     - self.u 
-     - self.doc
-     - self.action
-    """
-    def set_arg(self, name, value):
-        elem = self.action.find(name)
-        if elem == None:
-            elem = ET.SubElement(self.action, name)
-        elem.text = value
-
-    def get_arg(self, name, default=''):
-        return self.action.findtext(name, default)
-
-    def get_args(self):
-        args = []
-        for elem in self.action:
-            args.append((elem.tag, elem.text))
-        return args
-
-    def del_arg(self, name):
-        elem = self.action.find(name)
-        if elem != None:
-            self.action.remove(elem)
-
-    def tostring(self, encoding='utf-8', xml_decl=True):
-        register_namespace(ET, 'u', self.u)
-        return xml_tostring(self.doc, encoding, xml_decl)
-
-
-class SoapRequest(SoapMixin):
-    def __init__(self, fileobj, serviceType, name):
-        self.u = serviceType
-        self.doc = ET.parse(fileobj)
-        body = self.doc.find('{%s}Body' % ns.s)
-        self.action = body.find('{%s}%s' % (self.u, name))
-
-
-class SoapResponse(SoapMixin):
-    """
-    >>> r = SoapResponse('type', 'action', [('a1', 'v1'), ('a2', 'v2')])
+    >>> r = SoapMessage('type', 'action')
+    >>> r.set_args([('a1', 'v1'), ('a2', 'v2')])
     >>> r.get_arg('a1')
     'v1'
     >>> r.get_arg('a2')
@@ -193,19 +166,60 @@ class SoapResponse(SoapMixin):
     xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
     s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
   <s:Body>
-    <u:%sResponse xmlns:u="%s"/>
+    <u:%s xmlns:u="%s"/>
   </s:Body>
 </s:Envelope>
 """
 
-    def __init__(self, serviceType, name, args):
-        self.u = serviceType
-        xml = self.TEMPLATE % (name, self.u)
-        self.doc = ET.XML(xml)
+    def __init__(self, serviceType, name, doc=None):
+        if doc == None:
+            xml = self.TEMPLATE % (name, serviceType)
+            doc = ET.parse(StringIO(xml))
+
+        self.doc = doc.getroot()
         body = self.doc.find('{%s}Body' % ns.s)
-        self.action = body.find('{%s}%sResponse' % (self.u, name))
-        for arg in args:
-            self.set_arg(arg[0], arg[1])
+
+        if name == None or serviceType == None:
+            tag = body[0].tag
+            if tag[0] == '{':
+                serviceType, name = tag[1:].split('}', 1)
+            else:
+                serviceType, name = '', tag
+
+        self.u = serviceType
+        self.action = body.find('{%s}%s' % (self.u, name))
+
+    @classmethod
+    def parse(cls, fileobj, serviceType=None, name=None):
+        return cls(serviceType, name, ET.parse(fileobj))
+
+    def set_arg(self, name, value):
+        elem = self.action.find(name)
+        if elem == None:
+            elem = ET.SubElement(self.action, name)
+        elem.text = value
+
+    def set_args(self, args):
+        for name, value in args:
+            self.set_arg(name, value)
+
+    def get_arg(self, name, default=''):
+        return self.action.findtext(name, default)
+
+    def get_args(self):
+        args = []
+        for elem in self.action:
+            args.append((elem.tag, elem.text))
+        return args
+
+    def del_arg(self, name):
+        elem = self.action.find(name)
+        if elem != None:
+            self.action.remove(elem)
+
+    def tostring(self, encoding='utf-8', xml_decl=True):
+        register_namespace(ET, 'u', self.u)
+        return xml_tostring(self.doc, encoding, xml_decl)
 
 
 class SoapMiddleware(object):
@@ -224,8 +238,8 @@ class SSDPServer(DatagramProtocol):
     def __init__(self, owner):
         self.owner = owner;
 
-    def datagramReceived(self, data, (host, port)):
-        self.owner.datagramReceived(data, (host, port), get_outip(host))
+    def datagramReceived(self, data, addr):
+        self.owner.datagramReceived(data, addr, get_outip(addr[0]))
 
 
 class UpnpDevice(object):
@@ -292,9 +306,9 @@ class UpnpDevice(object):
 
         return packets
 
-    def make_msearch_response(self, headers, (addr, port)):
+    def make_msearch_response(self, headers, (addr, port), dest):
         # get ST
-        st = headers.getheader('st')
+        st = headers.getheader('ST')
         sts = ['ssdp:all', 'upnp:rootdevice', self.udn, self.deviceType]
         sts += self.serviceTypes
         if st not in sts:
@@ -441,19 +455,13 @@ class UpnpBase(object):
             delay = 0
             host = self.SSDP_ADDR + ':' + str(self.SSDP_PORT)
             for packet in device.make_notify_packets(host, ip, self.port, nts):
-                buff = self._build_packet('NOTIFY * HTTP/1.1', packet)
+                buff = build_packet('NOTIFY * HTTP/1.1', packet)
                 self.reactor.callLater(delay, self._send_packet, port, buff, self._addr)
                 delay += 0.020
 
     def _send_packet(self, port, buff, addr):
         if self.started:
             port.write(buff, addr)
-
-    def _build_packet(self, first_line, packet):
-        buff = first_line + '\r\n'
-        buff += '\r\n'.join([k + ': ' + v for k, v in packet])
-        buff += '\r\n\r\n'
-        return buff
 
     def datagramReceived(self, data, addr, outip):
         if outip not in self.interfaces:
@@ -469,13 +477,14 @@ class UpnpBase(object):
 
         # parse header
         headers = HTTPMessage(StringIO(data))
+        mx = int(headers.getheader('MX'))
 
         # send M-SEARCH response
         for udn in self.devices:
             device = self.devices[udn]
-            delay = 0
-            for packet in device.make_msearch_response(headers, (outip, self.port)):
-                buff = self._build_packet('HTTP/1.1 200 OK', packet)
+            delay = random() * mx
+            for packet in device.make_msearch_response(headers, (outip, self.port), addr):
+                buff = build_packet('HTTP/1.1 200 OK', packet)
                 self.reactor.callLater(delay, self._send_packet, self.ssdp, buff, addr)
                 delay += 0.020
 
@@ -557,6 +566,66 @@ class UpnpBase(object):
         self.interfaces = []
 
 
+class _dp(DatagramProtocol):
+    def __init__(self, owner):
+        self.owner = owner
+
+    def datagramReceived(self, datagram, address):
+        self.owner(datagram, address)
+
+
+class MSearchRequest(object):
+
+    SSDP_ADDR = '239.255.255.250'
+    SSDP_PORT = 1900
+    INADDR_ANY = '0.0.0.0'
+    _addr = (SSDP_ADDR, SSDP_PORT)
+    WAIT_MARGIN = 0.5
+
+    def __init__(self, owner=None):
+        self.ports = []
+        if owner == None:
+            owner = self.datagramReceived
+        self.owner = owner
+
+    def __del__(self):
+        for port in self.ports:
+            port.stopListening()
+
+    def datagramReceived(self, datagram, address):
+        pass
+
+    def send(self, reactor, st, mx=2, interfaces=[]):
+        if len(interfaces) == 0 or self.INADDR_ANY in interfaces:
+            outip = get_outip(self.SSDP_ADDR)
+            if outip not in interfaces:
+                interfaces.append(outip)
+            while self.INADDR_ANY in interfaces:
+                interfaces.remove(self.INADDR_ANY)
+
+        packet = [
+            ('HOST', self.SSDP_ADDR + ':' + str(self.SSDP_PORT)),
+            ('MAN', '"ssdp:discover"'),
+            ('MX', str(mx)),
+            ('ST', st),
+        ]
+        buff = build_packet('M-SEARCH * HTTP/1.1', packet)
+
+        new_ports = []
+        for ip in interfaces:
+            port = reactor.listenUDP(0, _dp(self.owner), interface=ip)
+            new_ports.append(port)
+            port.write(buff, self._addr)
+        self.ports += new_ports
+
+        return reactor.callLater(mx + self.WAIT_MARGIN, self._stop, new_ports)
+
+    def _stop(self, ports):
+        for port in ports:
+            port.stopListening()
+            self.ports.remove(port)
+
+
 def _test():
     import doctest
     doctest.testmod()
@@ -571,7 +640,7 @@ if __name__ == '__main__':
         sid = environ['wsgiorg.routing_args'][1]['sid']
         serviceType = environ['upnp.soap.serviceType']
         action = environ['upnp.soap.action']
-        req = SoapRequest(StringIO(environ['upnp.body']), serviceType, action)
+        req = SoapMessage.parse(StringIO(environ['upnp.body']), serviceType, action)
 
         print action + ' from ' + environ['REMOTE_ADDR']
         print '\t' + sid
