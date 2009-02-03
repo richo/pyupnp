@@ -105,7 +105,6 @@ def make_gmt():
 
 def not_found(environ, start_response):
     headers = [
-        ('DATE', make_gmt()),
         ('Content-type', 'text/plain'),
         ('Connection', 'close'),
     ]
@@ -327,7 +326,6 @@ class UpnpDevice(object):
                 usn = '::' + usn
             packet = [
                 ('CACHE-CONTROL', 'max-age=1800'),
-                ('DATE', make_gmt()),
                 ('EXT', ''),
                 ('LOCATION', 'http://%s:%s/%s' % (addr, port, self.udn)),
                 ('SERVER', self.server_name),
@@ -367,7 +365,6 @@ class UpnpDevice(object):
             pass
 
         headers = [
-            ('DATE', make_gmt()),
             ('Content-type', code[1]),
             ('Connection', 'close'),
         ]
@@ -404,6 +401,7 @@ class UpnpBase(object):
         self.interfaces = []
         self.tpool = ThreadPool(name=self.__class__.__name__)
         self.devices = {}
+        self.mts = {}
 
         # setup route map
         self.map = self._make_map()
@@ -411,6 +409,7 @@ class UpnpBase(object):
 
     def _make_map(self):
         m = Mapper()
+        m.connect('mt/:name/:id', controller='mt', action='get')
         m.connect(':udn/:sid/:action', controller='upnp', action='desc', sid=None)
         return m
 
@@ -428,6 +427,14 @@ class UpnpBase(object):
             del self.devices[udn]
         except KeyError:
             pass
+
+    def append_mt(self, mt):
+        if mt.name in self.mts:
+            remove_mt(mt.name)
+        self.mts[mt.name] = mt
+
+    def remove_mt(self, name):
+        del self.mts[name]
 
     def _notify_all(self, nts):
         if not self.started:
@@ -493,16 +500,30 @@ class UpnpBase(object):
         This function have to be called in a worker thread, not the IO thread.
         """
         rargs = environ['wsgiorg.routing_args'][1]
+        controller = rargs['controller']
+
+        # Media Transport
+        if controller == 'mt':
+            name = rargs['name']
+            if name in self.mts:
+                return self.mts[name](environ, start_response)
+            else:
+                return not_found(environ, start_response)
+
+        if controller != 'upnp':
+            return not_found(environ, start_response)
+
         try:
+            udn = rargs['udn']
             if isInIOThread():
                 # TODO: read request body
-                return self.devices[rargs['udn']](environ, start_response)
+                return self.devices[udn](environ, start_response)
             else:
                 # read request body
                 input = environ['wsgi.input']
                 environ['upnp.body'] = input.read(self.SOAP_BODY_MAX)
                 # call the app in IO thread
-                args = [rargs['udn'], environ, start_response]
+                args = [udn, environ, start_response]
                 blockingCallFromThread(self.reactor, self._call_handler, args)
                 return args[3]
         except Exception, e:
