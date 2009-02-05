@@ -394,6 +394,7 @@ class UpnpBase(object):
     INADDR_ANY = '0.0.0.0'
     SOAP_BODY_MAX = 200 * 1024
     _addr = (SSDP_ADDR, SSDP_PORT)
+    SSDP_INTERVAL = 0.020
 
     def __init__(self):
         self.started = False
@@ -409,21 +410,24 @@ class UpnpBase(object):
 
     def _make_map(self):
         m = Mapper()
-        m.connect('mt/:name/:id', controller='mt', action='get')
+        m.connect('mt/:name/*id', controller='mt', action='get')
         m.connect(':udn/:sid/:action', controller='upnp', action='desc', sid=None)
         return m
 
-    def append_device(self, devices):
+    def append_device(self, devices, interval=SSDP_INTERVAL):
         for device in devices:
+            delay = 0
             if device.udn in self.devices:
                 self.remove_device(device.udn)
+                if interval:
+                    delay = 0.3
             self.devices[device.udn] = device
-            self._notify(device, 'ssdp:alive')
+            self._notify(device, 'ssdp:alive', delay, interval)
 
-    def remove_device(self, udn):
+    def remove_device(self, udn, interval=SSDP_INTERVAL):
         try:
             device = self.devices[udn]
-            self._notify(device, 'ssdp:byebye')
+            self._notify(device, 'ssdp:byebye', interval=interval)
             del self.devices[udn]
         except KeyError:
             pass
@@ -436,13 +440,13 @@ class UpnpBase(object):
     def remove_mt(self, name):
         del self.mts[name]
 
-    def _notify_all(self, nts):
+    def _notify_all(self, nts, interval=SSDP_INTERVAL):
         if not self.started:
             return
         for udn in self.devices:
-            self._notify(self.devices[udn], nts)
+            self._notify(self.devices[udn], nts, interval=interval)
 
-    def _notify(self, device, nts):
+    def _notify(self, device, nts, delay=0, interval=SSDP_INTERVAL):
         if not self.started:
             return
         for ip in self.interfaces:
@@ -459,12 +463,14 @@ class UpnpBase(object):
                 ip = get_outip(self.SSDP_ADDR)
 
             # send notify packets
-            delay = 0
             host = self.SSDP_ADDR + ':' + str(self.SSDP_PORT)
             for packet in device.make_notify_packets(host, ip, self.port, nts):
                 buff = build_packet('NOTIFY * HTTP/1.1', packet)
-                self.reactor.callLater(delay, self._send_packet, port, buff, self._addr)
-                delay += 0.020
+                if interval:
+                    self.reactor.callLater(delay, self._send_packet, port, buff, self._addr)
+                    delay += interval
+                else:
+                    self._send_packet(port, buff, self._addr)
 
     def _send_packet(self, port, buff, addr):
         if self.started:
@@ -493,7 +499,7 @@ class UpnpBase(object):
             for packet in device.make_msearch_response(headers, (outip, self.port), addr):
                 buff = build_packet('HTTP/1.1 200 OK', packet)
                 self.reactor.callLater(delay, self._send_packet, self.ssdp, buff, addr)
-                delay += 0.020
+                delay += self.SSDP_INTERVAL
 
     def __call__(self, environ, start_response):
         """
