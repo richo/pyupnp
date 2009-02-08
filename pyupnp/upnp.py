@@ -43,6 +43,9 @@ from twisted.web import server
 from twisted.web import resource
 from twisted.web import wsgi
 
+from zope.interface import Interface
+from zope.interface import implements
+
 from routes import Mapper
 from routes.middleware import RoutesMiddleware
 
@@ -52,10 +55,15 @@ __all__ = [
     'UpnpDevice',
     'UpnpBase',
     'SoapMessage',
+    'SoapError',
+    'IContent',
+    'FileContent',
     'xml_tostring',
     'make_gmt',
+    'to_gmt',
     'not_found',
     'ns',
+    'StreamingServer',
 ]
 
 
@@ -101,7 +109,10 @@ def get_outip(remote_host):
     return sock.getsockname()[0]
 
 def make_gmt():
-    return time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())
+    return to_gmt(time.gmtime())
+
+def to_gmt(t):
+    return time.strftime('%a, %d %b %Y %H:%M:%S GMT', t)
 
 def not_found(environ, start_response):
     headers = [
@@ -219,6 +230,34 @@ class SoapMessage(object):
     def tostring(self, encoding='utf-8', xml_decl=True):
         register_namespace(ET, 'u', self.u)
         return xml_tostring(self.doc, encoding, xml_decl)
+
+
+class SoapError(object):
+
+    TEMPLATE = """<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
+    s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <s:Fault>
+      <faultcode>s:Client</faultcode>
+      <faultstring>UPnPError</faultstring>
+      <detail>
+        <UPnPError xmlns="urn:schemas-upnp-org:control-1-0">
+          <errorCode>%s</errorCode>
+          <errorDescription>%s</errorDescription>
+        </UPnPError>
+      </detail>
+    </s:Fault>
+  </s:Body>
+</s:Envelope>
+"""
+
+    def __init__(self, code=501, desc='Action Failed'):
+        self.code = str(code)
+        self.desc = desc
+
+    def tostring(self):
+        return self.TEMPLATE % (self.code, self.desc)
 
 
 class SoapMiddleware(object):
@@ -541,7 +580,7 @@ class UpnpBase(object):
         ret = self.devices[args[0]](args[1], args[2])
         args.append(ret)
 
-    def start(self, reactor, interfaces=[INADDR_ANY]):
+    def start(self, reactor, interfaces=[INADDR_ANY], http_port=0):
         if self.started:
             return
 
@@ -559,7 +598,7 @@ class UpnpBase(object):
         # start http server
         self.tpool.start()
         resource = WSGIResource(self.reactor, self.tpool, self.app)
-        self.http = self.reactor.listenTCP(0, server.Site(resource))
+        self.http = self.reactor.listenTCP(http_port, server.Site(resource))
         self.port = self.http.socket.getsockname()[1]
 
         # start ssdp server
@@ -651,6 +690,136 @@ class MSearchRequest(object):
         for port in ports:
             port.stopListening()
             self.ports.remove(port)
+
+
+class IContent(Interface):
+
+    def __iter__():
+        """Returns the content stream"""
+
+    def length(whence=1):
+        """Returns the content length."""
+
+    def set_range(first, last=-1):
+        """Sets content range in byte."""
+
+    def get_type():
+        """Returns Content-Type header value."""
+
+    def get_features():
+        """Returns contentFeatures.dlna.org header value."""
+
+
+class FileContent(object):
+
+    implements(IContent)
+    readsize = 32 * 1024
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.f = open(filename, 'rb')
+        self.last = -1
+        self.pos = 0
+
+    def __del__(self):
+        self.f.close()
+
+    def __iter__(self):
+        while True:
+            size = self.readsize
+            if self.last >= 0:
+                remain = self.last - self.pos + 1
+                if remain < size:
+                    size = remain
+                if size == 0:
+                    break
+            buff = self.f.read(size)
+            x = len(buff)
+            if x <= 0:
+                break
+            self.pos += x
+            yield buff
+        raise StopIteration()
+
+    def seek(self, pos, whence=0):
+        self.f.seek(pos, whence)
+        self.pos = pos
+
+    def length(self, whence=1):
+        pos = start = self.f.tell()
+        if whence == 0:
+            start = 0
+        self.f.seek(0, 2)
+        ret = self.f.tell()
+        self.f.seek(pos)
+        return ret - start
+
+    def set_range(self, first, last=-1):
+        length = self.length(0)
+        if first < 0:
+            raise ValueError('invalid range: first(%d) < 0' % first)
+        if last >= 0 and first > last:
+            raise ValueError('invalid range: first(%d) > last(%d)' % (first, last))
+        if last < 0 or length <= last:
+            last = length - 1
+        self.seek(first)
+        self.last = last
+        return str(first) + '-' + str(last) + '/' + str(length)
+
+    def get_type(self):
+        return 'application/octet-stream'
+
+    def get_features(self):
+        return None
+
+    def get_mtime(self):
+        return to_gmt(time.gmtime(os.path.getmtime(self.filename)))
+
+
+class StreamingServer(object):
+    def __init__(self, name):
+        self.name = name
+
+    def __call__(self, environ, start_response):
+        # response values
+        code = '405 Method Not Allowed'
+        headers = []
+        body = []
+
+        # params
+        method = environ['REQUEST_METHOD']
+        id = environ['wsgiorg.routing_args'][1]['id']
+
+        if method == 'HEAD' or method == 'GET':
+            # check if the file exists
+            content = self.get_content(id, environ)
+            if content != None:
+                code = '200 OK'
+                headers.append(('Content-type', content.get_type()))
+
+            headers.append(('contentFeatures.dlna.org', content.get_features()))
+
+            # get content body
+            if method == 'GET':
+                body = content
+
+                # Byte seek
+                if 'HTTP_RANGE' in environ:
+                    code = '206 Partial Content'
+                    try:
+                        fbp, lbp = environ['HTTP_RANGE'].split()[0].split('=')[1].split('-')
+                        lbp = -1 if lbp == '' else int(lbp)
+                        content_range = 'bytes ' + content.set_range(int(fbp), lbp)
+                        headers.append(('Content-Range', content_range))
+                    except (IOError, ValueError):
+                        code = '416 Requested Range Not Satisfiable'
+                        body = []
+
+        start_response(code, headers)
+        return body
+
+    def get_content(self, id, environ):
+        return Content(id)
 
 
 def _test():
