@@ -7,7 +7,7 @@ except ImportError:
     from ez_setup import use_setuptools
     from setuptools import setup, find_packages
 
-version = '0.1'
+version = '0.1.0'
 
 setup(
     name='pyupnp',
@@ -16,15 +16,24 @@ setup(
     author='Takashi Ito',
     author_email='itot@users.sourceforge.jp',
     url='http://code.google.com/p/pyupnp/',
-    packages=find_packages(),
     keywords='upnp dlna wsgi twisted',
     license='BSD',
     zip_safe=True,
+    packages=find_packages(),
+    package_data={
+        'pyupnp': ['xml/*.xml'],
+    },
+    setup_requires=[
+        'Twisted>=8.2.0',
+        'zope.interface',
+        'Routes',
+        'Paste',
+    ],
     install_requires=[
-        'Twisted>=8.1.0',
-        'zope.interface>=3.0.0',
-        'Routes>=1.8',
-        'Paste>=1.6',
+        'Twisted>=8.2.0',
+        'zope.interface',
+        'Routes',
+        'Paste',
     ],
 )
 

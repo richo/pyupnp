@@ -223,7 +223,7 @@ class StreamingServer(upnp.StreamingServer):
 
 if __name__ == '__main__':
     import sys
-    from sys import argv
+    from uuid import uuid1
     from getopt import gnu_getopt
     from twisted.internet import reactor
 
@@ -239,17 +239,18 @@ if __name__ == '__main__':
     def get_main_dir():
         if is_frozen():
             return os.path.abspath(os.path.dirname(sys.executable))
-        return os.path.abspath(os.path.dirname(argv[0]))
+        return os.path.abspath(os.path.dirname(sys.argv[0]))
 
     # settings
     content_dir = 'content_dir'
     http_port = 0
     udn = 'uuid:00000000-0000-0000-001122334455'
+    #udn = 'uuid:' + str(uuid1())
     dd = os.path.join(get_main_dir(), 'xml/ms.xml')
 
     # parse arguments
     long_opts = ['port=', 'content-dir=', 'udn=']
-    optlist, args = gnu_getopt(argv[1:], 'p:c:u:', long_opts)
+    optlist, args = gnu_getopt(sys.argv[1:], 'p:c:u:', long_opts)
     for name, value in optlist:
         if name in ('-p', '--port'):
             if 0 <= int(value) <= 65535:

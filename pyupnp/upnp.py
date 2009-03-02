@@ -830,7 +830,11 @@ def _test():
 if __name__ == '__main__':
     _test()
 
+    from sys import argv
+    from uuid import uuid1
+    from optparse import OptionParser
     from twisted.internet import reactor
+    from pkg_resources import resource_filename
 
     def soap_app(environ, start_response):
         sid = environ['wsgiorg.routing_args'][1]['sid']
@@ -845,7 +849,19 @@ if __name__ == '__main__':
 
         return not_found(environ, start_response)
 
-    device = UpnpDevice('uuid:00000000-0000-0000-001122334455', 'xml/ms.xml', soap_app)
+    resource_filename(__name__, 'xml/cds.xml')
+    resource_filename(__name__, 'xml/cms.xml')
+
+    # parse options
+    parser = OptionParser(usage='%prog [options]')
+    default_udn = 'uuid:00000000-0000-0000-001122334455'
+    #default_udn = 'uuid:' + str(uuid1())
+    parser.add_option('-u', '--udn', dest='udn', default=default_udn)
+    parser.add_option('-d', '--desc', dest='desc', default='xml/ms.xml')
+    options, args = parser.parse_args(argv)
+
+    dd = resource_filename(__name__, options.desc)
+    device = UpnpDevice(options.udn, dd, soap_app)
     base = UpnpBase()
     base.append_device([device])
     base.start(reactor)
