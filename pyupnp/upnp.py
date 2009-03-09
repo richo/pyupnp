@@ -63,18 +63,30 @@ __all__ = [
     'to_gmt',
     'not_found',
     'ns',
+    'nsmap',
+    'toxpath',
     'StreamingServer',
 ]
 
 
+nsmap = {
+    'device': 'urn:schemas-upnp-org:device-1-0',
+    'service': 'urn:schemas-upnp-org:service-1-0',
+    'dlna': 'urn:schemas-dlna-org:device-1-0',
+    's': 'http://schemas.xmlsoap.org/soap/envelope/',
+    'dc': 'http://purl.org/dc/elements/1.1/',
+    'upnp': 'urn:schemas-upnp-org:metadata-1-0/upnp/',
+    'didl': 'urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/',
+}
+
+class UpnpNamespaceMeta(type):
+    def __new__(cls, name, bases, d):
+        for prefix, uri in nsmap.items():
+            d[prefix] = uri
+        return type.__new__(cls, name, bases, d)
+
 class UpnpNamespace(object):
-    device = 'urn:schemas-upnp-org:device-1-0'
-    service = 'urn:schemas-upnp-org:service-1-0'
-    dlna = 'urn:schemas-dlna-org:device-1-0'
-    s = 'http://schemas.xmlsoap.org/soap/envelope/'
-    dc = 'http://purl.org/dc/elements/1.1/'
-    upnp = 'urn:schemas-upnp-org:metadata-1-0/upnp/'
-    didl = 'urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/'
+    __metaclass__ = UpnpNamespaceMeta
 
 ns = UpnpNamespace
 
@@ -96,12 +108,18 @@ register_namespace(ET, 'dc', ns.dc)
 register_namespace(ET, 'upnp', ns.upnp)
 register_namespace(ET, 'dlna', ns.dlna)
 
-
-def find(elem, nodes, ns):
-    return elem.find('/'.join(['{%s}' % ns + x for x in nodes]))
-
-def findtext(elem, nodes, ns, default=None):
-    return elem.findtext('/'.join(['{%s}' % ns + x for x in nodes]), default)
+def toxpath(path, default_ns=None, nsmap=nsmap):
+    nodes = []
+    pref = '{%s}' % default_ns if default_ns else ''
+    for node in [x.split(':', 1) for x in path.split('/')]:
+        if len(node) == 1:
+            nodes.append(pref + node[0])
+        else:
+            if node[0] in nsmap:
+                nodes.append('{%s}%s' % (nsmap[node[0]], node[1]))
+            else:
+                nodes.append(':'.join(node))
+    return '/'.join(nodes)
 
 def get_outip(remote_host):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -300,29 +318,29 @@ class UpnpDevice(object):
         xml_dir = os.path.dirname(dd)
 
         # set UDN
-        find(self.dd, ['device', 'UDN'], ns.device).text = udn
+        self.dd.find(toxpath('device/UDN', ns.device)).text = udn
 
         # get deviceType
-        self.deviceType = findtext(self.dd, ['device', 'deviceType'], ns.device)
+        self.deviceType = self.dd.findtext('device/deviceType', ns.device)
 
         self.services = {}
         self.serviceTypes = []
-        for service in find(self.dd, ['device', 'serviceList'], ns.device):
-            sid = findtext(service, ['serviceId'], ns.device, '')
+        for service in self.dd.find(toxpath('device/serviceList', ns.device)):
+            sid = service.findtext('{%s}serviceId' % ns.device, '')
 
             # SCPDURL
-            scpdurl = find(service, ['SCPDURL'], ns.device)
+            scpdurl = service.find('{%s}SCPDURL' % ns.device)
             self.services[sid] = ET.parse(os.path.join(xml_dir, scpdurl.text))
             scpdurl.text = '/' + self.udn + '/' + sid
 
             # controlURL
-            find(service, ['controlURL'], ns.device).text = scpdurl.text + '/soap'
+            service.find('{%s}controlURL' % ns.device).text = scpdurl.text + '/soap'
 
             # eventSubURL
-            find(service, ['eventSubURL'], ns.device).text = scpdurl.text + '/sub'
+            service.find('{%s}eventSubURL' % ns.device).text = scpdurl.text + '/sub'
 
             # append serviceType
-            serviceType = findtext(service, ['serviceType'], ns.device, '')
+            serviceType = service.findtext('{%s}serviceType' % ns.device, '')
             self.serviceTypes.append(serviceType)
 
     def make_notify_packets(self, host, ip, port_num, nts):
