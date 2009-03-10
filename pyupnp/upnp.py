@@ -321,7 +321,7 @@ class UpnpDevice(object):
         self.dd.find(toxpath('device/UDN', ns.device)).text = udn
 
         # get deviceType
-        self.deviceType = self.dd.findtext('device/deviceType', ns.device)
+        self.deviceType = self.dd.findtext(toxpath('device/deviceType', ns.device))
 
         self.services = {}
         self.serviceTypes = []
