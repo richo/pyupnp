@@ -65,13 +65,16 @@ __all__ = [
     'ns',
     'nsmap',
     'toxpath',
+    'mkxp',
     'StreamingServer',
+    'MSearchRequest',
 ]
 
 
 nsmap = {
     'device': 'urn:schemas-upnp-org:device-1-0',
     'service': 'urn:schemas-upnp-org:service-1-0',
+    'control': 'urn:schemas-upnp-org:control-1-0',
     'dlna': 'urn:schemas-dlna-org:device-1-0',
     's': 'http://schemas.xmlsoap.org/soap/envelope/',
     'dc': 'http://purl.org/dc/elements/1.1/',
@@ -121,6 +124,11 @@ def toxpath(path, default_ns=None, nsmap=nsmap):
                 nodes.append(':'.join(node))
     return '/'.join(nodes)
 
+def mkxp(default_ns=None, nsmap=nsmap):
+    def _mkxp(path, default_ns=default_ns, nsmap=nsmap):
+        return toxpath(path, default_ns, nsmap)
+    return _mkxp
+
 def get_outip(remote_host):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.connect((remote_host, 80))
@@ -141,10 +149,10 @@ def not_found(environ, start_response):
     return ['Not Found']
 
 def build_packet(first_line, packet):
-    buff = first_line + '\r\n'
-    buff += '\r\n'.join([k + ': ' + v for k, v in packet])
-    buff += '\r\n\r\n'
-    return buff
+    lines = [first_line]
+    lines += [': '.join(t) for t in packet]
+    lines += ['', '']
+    return '\r\n'.join(lines)
 
 def xml_tostring(elem, encoding='utf-8', xml_decl=None, default_ns=None):
     class dummy(object):
@@ -217,6 +225,12 @@ class SoapMessage(object):
         self.u = serviceType
         self.action = body.find('{%s}%s' % (self.u, name))
 
+    def get_name(self):
+        return self.action.tag.split('}')[1][1:]
+
+    def get_header(self):
+        return '"%s#%s"' % (self.u, self.get_name)
+
     @classmethod
     def parse(cls, fileobj, serviceType=None, name=None):
         return cls(serviceType, name, ET.parse(fileobj))
@@ -277,6 +291,14 @@ class SoapError(object):
     def tostring(self):
         return self.TEMPLATE % (self.code, self.desc)
 
+    @classmethod
+    def parse(cls, text):
+        doc = ET.XML(text)
+        elem = toxpath('s:Body/s:Fault/detail/control:UPnPError')
+        code = int(elem.findtext(toxpath('control:errorCode')))
+        desc = elem.findtext(toxpath('control:errorDescription'), '')
+        return SoapError(code, desc)
+
 
 class SoapMiddleware(object):
     def __init__(self, app):
@@ -296,6 +318,9 @@ class SSDPServer(DatagramProtocol):
 
     def datagramReceived(self, data, addr):
         self.owner.datagramReceived(data, addr, get_outip(addr[0]))
+
+
+xp = mkxp(ns.device)
 
 
 class UpnpDevice(object):
@@ -318,26 +343,26 @@ class UpnpDevice(object):
         xml_dir = os.path.dirname(dd)
 
         # set UDN
-        self.dd.find(toxpath('device/UDN', ns.device)).text = udn
+        self.dd.find(xp('device/UDN')).text = udn
 
         # get deviceType
-        self.deviceType = self.dd.findtext(toxpath('device/deviceType', ns.device))
+        self.deviceType = self.dd.findtext(xp('device/deviceType'))
 
         self.services = {}
         self.serviceTypes = []
-        for service in self.dd.find(toxpath('device/serviceList', ns.device)):
-            sid = service.findtext('{%s}serviceId' % ns.device, '')
+        for service in self.dd.find(xp('device/serviceList')):
+            sid = service.findtext(xp('serviceId'), '')
 
             # SCPDURL
-            scpdurl = service.find('{%s}SCPDURL' % ns.device)
+            scpdurl = service.find(xp('SCPDURL'))
             self.services[sid] = ET.parse(os.path.join(xml_dir, scpdurl.text))
-            scpdurl.text = '/' + self.udn + '/' + sid
+            scpdurl.text = '/'.join(('', self.udn, sid))
 
             # controlURL
-            service.find('{%s}controlURL' % ns.device).text = scpdurl.text + '/soap'
+            service.find(xp('controlURL')).text = scpdurl.text + '/soap'
 
             # eventSubURL
-            service.find('{%s}eventSubURL' % ns.device).text = scpdurl.text + '/sub'
+            service.find(xp('eventSubURL')).text = scpdurl.text + '/sub'
 
             # append serviceType
             serviceType = service.findtext('{%s}serviceType' % ns.device, '')
@@ -782,7 +807,7 @@ class FileContent(object):
             last = length - 1
         self.seek(first)
         self.last = last
-        return str(first) + '-' + str(last) + '/' + str(length)
+        return '%d-%d/%d' % (first, last, length)
 
     def get_type(self):
         return 'application/octet-stream'
