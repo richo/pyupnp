@@ -226,10 +226,10 @@ class SoapMessage(object):
         self.action = body.find('{%s}%s' % (self.u, name))
 
     def get_name(self):
-        return self.action.tag.split('}')[1][1:]
+        return self.action.tag.split('}')[1]
 
     def get_header(self):
-        return '"%s#%s"' % (self.u, self.get_name)
+        return '"%s#%s"' % (self.u, self.get_name())
 
     @classmethod
     def parse(cls, fileobj, serviceType=None, name=None):
@@ -516,7 +516,7 @@ class UpnpBase(object):
 
     def append_mt(self, mt):
         if mt.name in self.mts:
-            remove_mt(mt.name)
+            self.remove_mt(mt.name)
         self.mts[mt.name] = mt
 
     def remove_mt(self, name):
@@ -660,7 +660,7 @@ class UpnpBase(object):
         if not self.started:
             return
 
-        self._notify_all('ssdp:byebye')
+        self._notify_all('ssdp:byebye', interval=0)
 
         # stop ssdp server
         for ip in self.interfaces:
