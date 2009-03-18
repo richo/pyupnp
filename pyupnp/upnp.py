@@ -100,7 +100,7 @@ def is_new_etree(et):
     return int(ver[1]) > 2
 
 def register_namespace(et, prefix, uri):
-    if is_new_etree(ET):
+    if is_new_etree(et):
         et.register_namespace(prefix, uri)
     else:
         et._namespace_map[uri] = prefix
@@ -373,17 +373,27 @@ class UpnpDevice(object):
         types += self.services.keys()
         packets = []
 
-        for nt in types:
-            packet = [
-                ('HOST', host),
-                ('CACHE-CONTROL', 'max-age=1800'),
-                ('LOCATION', 'http://%s:%d/%s' % (ip, port_num, self.udn)),
-                ('NT', nt),
-                ('NTS', nts),
-                ('SERVER', self.server_name),
-                ('USN', self.udn + ('' if nt == self.udn else '::' + nt)),
-            ]
-            packets.append(packet)
+        if nts == 'ssdp:alive':
+            for nt in types:
+                packet = [
+                    ('HOST', host),
+                    ('CACHE-CONTROL', 'max-age=1800'),
+                    ('LOCATION', 'http://%s:%d/%s' % (ip, port_num, self.udn)),
+                    ('NT', nt),
+                    ('NTS', nts),
+                    ('SERVER', self.server_name),
+                    ('USN', self.udn + ('' if nt == self.udn else '::' + nt)),
+                ]
+                packets.append(packet)
+        else:
+            for nt in types:
+                packet = [
+                    ('HOST', host),
+                    ('NT', nt),
+                    ('NTS', nts),
+                    ('USN', self.udn + ('' if nt == self.udn else '::' + nt)),
+                ]
+                packets.append(packet)
 
         return packets
 
