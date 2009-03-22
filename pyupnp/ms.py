@@ -51,10 +51,10 @@ class wrapper(object):
 
 
 formats = {
-    '.jpg' : ('object.item.imageItem', 'http-get:*:image/jpeg', 'DLNA.ORG_OP=01'),
-    '.png' : ('object.item.imageItem', 'http-get:*:image/png', 'DLNA.ORG_OP=01'),
-    '.mp3' : ('object.item.audioItem', 'http-get:*:audio/mpeg', 'DLNA.ORG_OP=01'),
-    '.mpg' : ('object.item.videoItem', 'http-get:*:video/mpeg', 'DLNA.ORG_OP=01'),
+    '.jpg' : ('object.item.imageItem', 'image/jpeg', 'DLNA.ORG_OP=01'),
+    '.png' : ('object.item.imageItem', 'image/png', 'DLNA.ORG_OP=01'),
+    '.mp3' : ('object.item.audioItem', 'audio/mpeg', 'DLNA.ORG_OP=01'),
+    '.mpg' : ('object.item.videoItem', 'video/mpeg', 'DLNA.ORG_OP=01'),
 }
 
 nsmap = {
@@ -81,7 +81,7 @@ class MediaServer(object):
             else:
                 upnpclass = formats[ext][0]
                 url = base_url + url_for(controller='mt', action='get', name='ms', id=id)
-                protocolInfo = formats[ext][1] + ':' + formats[ext][2]
+                protocolInfo = 'http-get:*:%s:%s' % formats[ext][1:]
                 resources.append((protocolInfo, url))
             props = [
                 ('upnp:class', upnpclass),
@@ -181,11 +181,11 @@ class MediaServer(object):
             resp = upnp.SoapMessage(serviceType, action + 'Response')
             sources = []
             for ext in formats:
-                sources.append(formats[ext][1])
+                sources.append('http:*:%s:%s' % formats[ext][1:])
             resp.set_args([('Source', ",".join(sources)), ('Sink', '')])
     
         else:
-            return not_found(environ, start_response)
+            return upnp.not_found(environ, start_response)
     
         # Content-Length
         buff = resp.tostring()
@@ -203,7 +203,7 @@ class File(upnp.FileContent):
 
     def get_type(self):
         if self.ext in formats:
-            return formats[self.ext][1].split(':')[2]
+            return formats[self.ext][1]
         return upnp.FileContent.get_type(self)
 
     def get_features(self):
@@ -227,7 +227,7 @@ if __name__ == '__main__':
     from getopt import gnu_getopt
     from twisted.internet import reactor
 
-    if hasattr(sys,"setdefaultencoding"):
+    if hasattr(sys, "setdefaultencoding"):
         sys.setdefaultencoding("utf-8")
 
     def is_frozen():

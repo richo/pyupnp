@@ -33,19 +33,14 @@ from xml.etree import ElementTree as ET
 from httplib import HTTPMessage
 from random import random
 
+from zope.interface import Interface, implements
 from twisted.internet import error
 from twisted.internet.udp import MulticastPort
 from twisted.internet.protocol import DatagramProtocol
 from twisted.internet.threads import blockingCallFromThread
 from twisted.python.threadpool import ThreadPool
 from twisted.python.threadable import isInIOThread
-from twisted.web import server
-from twisted.web import resource
-from twisted.web import wsgi
-
-from zope.interface import Interface
-from zope.interface import implements
-
+from twisted.web import server, resource, wsgi
 from routes import Mapper
 from routes.middleware import RoutesMiddleware
 
@@ -179,23 +174,6 @@ def xml_tostring(elem, encoding='utf-8', xml_decl=None, default_ns=None):
 
 
 class SoapMessage(object):
-    """
-    >>> r = SoapMessage('type', 'action')
-    >>> r.set_args([('a1', 'v1'), ('a2', 'v2')])
-    >>> r.get_arg('a1')
-    'v1'
-    >>> r.get_arg('a2')
-    'v2'
-    >>> r.get_args()
-    [('a1', 'v1'), ('a2', 'v2')]
-    >>> r.set_arg('a1', 'new one')
-    >>> r.get_arg('a1')
-    'new one'
-    >>> r.del_arg('a1')
-    >>> r.get_arg('a1', None)
-    >>> r.get_arg('a1')
-    ''
-    """
 
     TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope
@@ -294,7 +272,7 @@ class SoapError(object):
     @classmethod
     def parse(cls, text):
         doc = ET.XML(text)
-        elem = toxpath('s:Body/s:Fault/detail/control:UPnPError')
+        elem = doc.find(toxpath('s:Body/s:Fault/detail/control:UPnPError'))
         code = int(elem.findtext(toxpath('control:errorCode')))
         desc = elem.findtext(toxpath('control:errorDescription'), '')
         return SoapError(code, desc)
@@ -305,7 +283,7 @@ class SoapMiddleware(object):
         self.app = app
 
     def __call__(self, environ, start_response):
-        soapaction = (environ['HTTP_SOAPACTION'] or '').strip('"').split('#', 1)
+        soapaction = environ.get('HTTP_SOAPACTION', '').strip('"').split('#', 1)
         if len(soapaction) == 2:
             environ['upnp.soap.serviceType'] = soapaction[0]
             environ['upnp.soap.action'] = soapaction[1]
@@ -398,7 +376,6 @@ class UpnpDevice(object):
         return packets
 
     def make_msearch_response(self, headers, (addr, port), dest):
-        # get ST
         st = headers.getheader('ST')
         sts = ['ssdp:all', 'upnp:rootdevice', self.udn, self.deviceType]
         sts += self.serviceTypes
@@ -440,13 +417,9 @@ class UpnpDevice(object):
 
         if method == 'GET' and action == 'desc':
             if sid == None:
-                # DD
-                body = xml_tostring(self.dd.getroot(), 'utf-8', True, ns.device)
-                code = self.OK
+                code, body = self._get_dd()
             elif sid in self.services:
-                # SCPD
-                body = xml_tostring(self.services[sid].getroot(), 'utf-8', True, ns.service)
-                code = self.OK
+                code, body = self._get_scpd(sid)
 
         elif method == 'POST' and action == 'soap':
             if self.soap_app:
@@ -463,6 +436,16 @@ class UpnpDevice(object):
 
         start_response(code[0], headers)
         return [body]
+
+    def _get_dd(self):
+        body = xml_tostring(self.dd.getroot(), 'utf-8', True, ns.device)
+        code = self.OK
+        return code, body
+
+    def _get_scpd(self, sid):
+        body = xml_tostring(self.services[sid].getroot(), 'utf-8', True, ns.service)
+        code = self.OK
+        return code, body
 
 
 class _WSGIResponse(wsgi._WSGIResponse):
@@ -505,6 +488,12 @@ class UpnpBase(object):
         m.connect('mt/:name/*id', controller='mt', action='get')
         m.connect(':udn/:sid/:action', controller='upnp', action='desc', sid=None)
         return m
+
+    def make_mt_path(self, name, id):
+        return self.map.generate(controller='mt', action='get', name=name, id=id)
+
+    def make_desc_path(self, udn, sid=None):
+        return self.map.generate(controller='upnp', action='desc', udn=udn, sid=sid)
 
     def append_device(self, devices, interval=SSDP_INTERVAL):
         for device in devices:
