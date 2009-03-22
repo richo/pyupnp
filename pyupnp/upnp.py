@@ -348,7 +348,7 @@ class UpnpDevice(object):
 
     def make_notify_packets(self, host, ip, port_num, nts):
         types = ['upnp:rootdevice', self.udn, self.deviceType]
-        types += self.services.keys()
+        types += self.serviceTypes
         packets = []
 
         if nts == 'ssdp:alive':
@@ -385,7 +385,7 @@ class UpnpDevice(object):
         if st == self.udn:
             usns = ['']
         elif st == 'ssdp:all':
-            usns = ['upnp:rootdevice', '', self.deviceType] + self.services.keys()
+            usns = ['upnp:rootdevice', '', self.deviceType] + self.serviceTypes
         else:
             usns = [st]
 
