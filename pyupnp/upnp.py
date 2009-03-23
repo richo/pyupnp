@@ -40,7 +40,7 @@ from twisted.internet.protocol import DatagramProtocol
 from twisted.internet.threads import blockingCallFromThread
 from twisted.python.threadpool import ThreadPool
 from twisted.python.threadable import isInIOThread
-from twisted.web import server, resource, wsgi
+from twisted.web import server, resource, wsgi, static
 from routes import Mapper
 from routes.middleware import RoutesMiddleware
 
@@ -89,13 +89,10 @@ class UpnpNamespace(object):
 ns = UpnpNamespace
 
 def is_new_etree(et):
-    ver = et.VERSION.split('.')
-    if int(ver[0]) > 1:
-        return True
-    return int(ver[1]) > 2
+    return hasattr(et, 'register_namespace')
 
 def register_namespace(et, prefix, uri):
-    if is_new_etree(et):
+    if hasattr(et, 'register_namespace'):
         et.register_namespace(prefix, uri)
     else:
         et._namespace_map[uri] = prefix
@@ -454,6 +451,35 @@ class _WSGIResponse(wsgi._WSGIResponse):
         self.environ['REMOTE_ADDR'] = request.getClientIP()
         self.request.responseHeaders.removeHeader('content-type')
 
+    def run(self):
+        appIterator = self.application(self.environ, self.startResponse)
+
+        if isinstance(appIterator, FileContent):
+            def transferFile():
+                self._sendResponseHeaders()
+                static.FileTransfer(appIterator.f,
+                                    appIterator.length(),
+                                    self.request)
+            self.reactor.callFromThread(transferFile)
+            return
+
+        for elem in appIterator:
+            if elem:
+                self.write(elem)
+        close = getattr(appIterator, 'close', None)
+        if close is not None:
+            close()
+        if self.started:
+            def wsgiFinish():
+                self.request.finish()
+            self.reactor.callFromThread(wsgiFinish)
+        else:
+            def wsgiSendResponseHeadersAndFinish():
+                self._sendResponseHeaders()
+                self.request.finish()
+            self.started = True
+            self.reactor.callFromThread(wsgiSendResponseHeadersAndFinish)
+
 
 class WSGIResource(wsgi.WSGIResource):
     def render(self, request):
@@ -764,7 +790,8 @@ class FileContent(object):
         self.pos = 0
 
     def __del__(self):
-        self.f.close()
+        #self.f.close()
+        pass
 
     def __iter__(self):
         while True:
