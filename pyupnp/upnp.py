@@ -300,6 +300,7 @@ xp = mkxp(ns.device)
 
 class UpnpDevice(object):
 
+    max_age = 1800
     SERVER_NAME = 'OS/x.x UPnP/1.0 py/1.0'
     OK = ('200 OK', 'text/xml; charset="utf-8"')
     NOT_FOUND = ('404 Not Found', 'text/plain')
@@ -352,7 +353,7 @@ class UpnpDevice(object):
             for nt in types:
                 packet = [
                     ('HOST', host),
-                    ('CACHE-CONTROL', 'max-age=1800'),
+                    ('CACHE-CONTROL', 'max-age=%d' % self.max_age),
                     ('LOCATION', 'http://%s:%d/%s' % (ip, port_num, self.udn)),
                     ('NT', nt),
                     ('NTS', nts),
@@ -391,7 +392,7 @@ class UpnpDevice(object):
             if usn != '':
                 usn = '::' + usn
             packet = [
-                ('CACHE-CONTROL', 'max-age=1800'),
+                ('CACHE-CONTROL', 'max-age=%d' % self.max_age),
                 ('EXT', ''),
                 ('LOCATION', 'http://%s:%s/%s' % (addr, port, self.udn)),
                 ('SERVER', self.server_name),
@@ -504,6 +505,7 @@ class UpnpBase(object):
         self.tpool = ThreadPool(name=self.__class__.__name__)
         self.devices = {}
         self.mts = {}
+        self.deferreds = {}
 
         # setup route map
         self.map = self._make_map()
@@ -536,6 +538,11 @@ class UpnpBase(object):
             device = self.devices[udn]
             self._notify(device, 'ssdp:byebye', interval=interval)
             del self.devices[udn]
+            # cancel alive reservation
+            d = self.deferreds.get(udn)
+            if d:
+                d.cancel()
+                del self.deferreds[udn]
         except KeyError:
             pass
 
@@ -554,8 +561,9 @@ class UpnpBase(object):
             self._notify(self.devices[udn], nts, interval=interval)
 
     def _notify(self, device, nts, delay=0, interval=SSDP_INTERVAL):
-        if not self.started:
+        if not self.started or device.udn not in self.devices:
             return
+
         for ip in self.interfaces:
             # create send port
             port = MulticastPort(0, None, interface=ip, reactor=self.reactor)
@@ -578,6 +586,17 @@ class UpnpBase(object):
                     delay += interval
                 else:
                     self._send_packet(port, buff, self._addr)
+
+        # reserve the next alive
+        if nts == 'ssdp:alive':
+            d = self.deferreds.get(device.udn)
+            if d and not d.called:
+                d.cancel()
+            d = self.reactor.callLater(device.max_age / 2,
+                                       self._notify,
+                                       device,
+                                       nts)
+            self.deferreds[device.udn] = d
 
     def _send_packet(self, port, buff, addr):
         if self.started:
