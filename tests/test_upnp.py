@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from StringIO import StringIO
 from httplib import HTTPMessage
 from xml.etree import ElementTree as ET
@@ -110,6 +112,10 @@ def test_SoapMessage():
 
     _check_elem(msg.doc, ET.XML(msg.tostring()))
 
+    # encoding check
+    msg.set_arg('mbarg', '日本語')
+    _check_elem(msg.doc, ET.XML(msg.tostring()))
+
 
 def test_SoapError():
     code = 123
@@ -148,10 +154,6 @@ def test_UpnpBase():
     # make_mt_path
     assert '/mt/name/id' == base.make_mt_path('name', 'id')
 
-    # make_desc_path
-    assert '/udn' == base.make_desc_path('udn')
-    assert '/udn/sid' == base.make_desc_path('udn', 'sid')
-
 
 def test_UpnpDevice():
     xp = mkxp(ns.device)
@@ -184,7 +186,7 @@ def test_UpnpDevice():
     port = 19000
     addr = (ip, port)
     dest = '192.168.0.101'
-    location = 'http://%s:%d/%s' % (ip, port, udn)
+    location = device.make_location(ip, port)
 
     sa = device.make_notify_packets(host, ip, port, 'ssdp:alive')
     sb = device.make_notify_packets(host, ip, port, 'ssdp:byebye')
@@ -243,11 +245,11 @@ def test_UpnpDevice():
         from routes.middleware import RoutesMiddleware
         sid = 'urn:upnp-org:serviceId:ConnectionManager'
         base = UpnpBase()
-        app = TestApp(RoutesMiddleware(device, base.map))
+        app = TestApp(RoutesMiddleware(device, base.mapper))
         # DD
-        res = app.get('/' + udn)
+        res = app.get('/upnp/' + udn)
         # SCPD
-        res = app.get('/%s/%s' % (udn, sid))
+        res = app.get('/upnp/%s/%s' % (udn, sid))
         # SOAP
         #res = app.get('/%s/%s/%s' % (udn, sid, 'soap'))
     except ImportError:

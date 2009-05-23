@@ -306,13 +306,18 @@ class UpnpDevice(object):
     NOT_FOUND = ('404 Not Found', 'text/plain')
     SERVER_ERROR = ('500 Internal Server Error', 'text/plain')
 
-    def __init__(self, udn, dd, soap_app, server_name=SERVER_NAME):
+    def __init__(self, udn, dd, soap_app, server_name=SERVER_NAME, mapper=None):
         self.udn = udn
         self.ssdp = None
         self.http = None
         self.port = 0
         self.server_name = server_name
         self.soap_app = SoapMiddleware(soap_app) if soap_app else None
+
+        # mapper
+        if mapper == None:
+            mapper = UpnpBase.make_mapper()
+        self.mapper = mapper
 
         # load DD
         self.dd = ET.parse(dd)
@@ -332,17 +337,23 @@ class UpnpDevice(object):
             # SCPDURL
             scpdurl = service.find(xp('SCPDURL'))
             self.services[sid] = ET.parse(os.path.join(xml_dir, scpdurl.text))
-            scpdurl.text = '/'.join(('', self.udn, sid))
+            scpdurl.text = self.make_upnp_path(sid)
 
             # controlURL
-            service.find(xp('controlURL')).text = scpdurl.text + '/soap'
+            service.find(xp('controlURL')).text = self.make_upnp_path(sid, 'soap')
 
             # eventSubURL
-            service.find(xp('eventSubURL')).text = scpdurl.text + '/sub'
+            service.find(xp('eventSubURL')).text = self.make_upnp_path(sid, 'sub')
 
             # append serviceType
             serviceType = service.findtext('{%s}serviceType' % ns.device, '')
             self.serviceTypes.append(serviceType)
+
+    def make_upnp_path(self, sid=None, action='desc'):
+        return self.mapper.generate(controller='upnp', action=action, udn=self.udn, sid=sid)
+
+    def make_location(self, ip, port_num):
+        return 'http://%s:%d%s' % (ip, port_num, self.make_upnp_path())
 
     def make_notify_packets(self, host, ip, port_num, nts):
         types = ['upnp:rootdevice', self.udn, self.deviceType]
@@ -354,7 +365,7 @@ class UpnpDevice(object):
                 packet = [
                     ('HOST', host),
                     ('CACHE-CONTROL', 'max-age=%d' % self.max_age),
-                    ('LOCATION', 'http://%s:%d/%s' % (ip, port_num, self.udn)),
+                    ('LOCATION', self.make_location(ip, port_num)),
                     ('NT', nt),
                     ('NTS', nts),
                     ('SERVER', self.server_name),
@@ -394,7 +405,7 @@ class UpnpDevice(object):
             packet = [
                 ('CACHE-CONTROL', 'max-age=%d' % self.max_age),
                 ('EXT', ''),
-                ('LOCATION', 'http://%s:%s/%s' % (addr, port, self.udn)),
+                ('LOCATION', self.make_location(addr, port)),
                 ('SERVER', self.server_name),
                 ('ST', st),
                 ('USN', self.udn + usn)
@@ -498,7 +509,7 @@ class UpnpBase(object):
     _addr = (SSDP_ADDR, SSDP_PORT)
     SSDP_INTERVAL = 0.020
 
-    def __init__(self):
+    def __init__(self, mapper=None):
         self.started = False
         self.reactor = None
         self.interfaces = []
@@ -508,20 +519,20 @@ class UpnpBase(object):
         self.deferreds = {}
 
         # setup route map
-        self.map = self._make_map()
-        self.app = RoutesMiddleware(self, self.map)
+        if mapper == None:
+            mapper = self.make_mapper()
+        self.mapper = mapper
+        self.app = RoutesMiddleware(self, self.mapper)
 
-    def _make_map(self):
+    @staticmethod
+    def make_mapper():
         m = Mapper()
         m.connect('mt/:name/*id', controller='mt', action='get')
-        m.connect(':udn/:sid/:action', controller='upnp', action='desc', sid=None)
+        m.connect('upnp/:udn/:sid/:action', controller='upnp', action='desc', sid=None)
         return m
 
     def make_mt_path(self, name, id):
-        return self.map.generate(controller='mt', action='get', name=name, id=id)
-
-    def make_desc_path(self, udn, sid=None):
-        return self.map.generate(controller='upnp', action='desc', udn=udn, sid=sid)
+        return self.mapper.generate(controller='mt', action='get', name=name, id=id)
 
     def append_device(self, devices, interval=SSDP_INTERVAL):
         for device in devices:
@@ -569,7 +580,7 @@ class UpnpBase(object):
             port = MulticastPort(0, None, interface=ip, reactor=self.reactor)
             try:
                 port._bindSocket()
-            except error.CannnotListenError, e:
+            except error.CannotListenError, e:
                 # in case the ip address changes
                 continue
 
