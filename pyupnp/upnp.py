@@ -476,7 +476,7 @@ class _WSGIResponse(wsgi._WSGIResponse):
             def transferFile():
                 self._sendResponseHeaders()
                 static.FileTransfer(appIterator.f,
-                                    appIterator.length(),
+                                    appIterator.last + 1,
                                     self.request)
             self.reactor.callFromThread(transferFile)
             return
@@ -822,8 +822,8 @@ class FileContent(object):
     def __init__(self, filename):
         self.filename = filename
         self.f = open(filename, 'rb')
-        self.last = -1
         self.pos = 0
+        self.last = self.length(0) - 1
 
     def __del__(self):
         #self.f.close()
