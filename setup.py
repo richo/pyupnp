@@ -7,7 +7,7 @@ except ImportError:
     from ez_setup import use_setuptools
     from setuptools import setup, find_packages
 
-version = '0.1.1'
+version = '0.2.0'
 
 setup(
     name='pyupnp',
@@ -28,12 +28,14 @@ setup(
         'zope.interface',
         'Routes',
         'Paste',
+        'WebOb',
     ],
     install_requires=[
         'Twisted>=8.2.0',
         'zope.interface',
         'Routes',
         'Paste',
+        'WebOb',
     ],
 )
 

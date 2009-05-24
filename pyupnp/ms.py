@@ -212,7 +212,7 @@ class File(upnp.FileContent):
         return upnp.FileContent.get_features(self)
 
 
-class StreamingServer(upnp.StreamingServer):
+class StreamingServer(upnp.ByteSeekMixin, upnp.TimeSeekMixin, upnp.StreamingServer):
     def __init__(self, name, content_dir=os.path.curdir):
         upnp.StreamingServer.__init__(self, name)
         self.content_dir = unicode(content_dir)

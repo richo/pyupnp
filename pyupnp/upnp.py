@@ -28,6 +28,7 @@
 import os
 import socket
 import time
+import re
 from cStringIO import StringIO
 from xml.etree import ElementTree as ET
 from httplib import HTTPMessage
@@ -43,6 +44,7 @@ from twisted.python.threadable import isInIOThread
 from twisted.web import server, resource, wsgi, static
 from routes import Mapper
 from routes.middleware import RoutesMiddleware
+import webob
 
 
 __all__ = [
@@ -63,6 +65,10 @@ __all__ = [
     'mkxp',
     'StreamingServer',
     'MSearchRequest',
+    'ByteSeekMixin',
+    'TimeSeekMixin',
+    'parse_npt',
+    'to_npt',
 ]
 
 
@@ -353,7 +359,7 @@ class UpnpDevice(object):
         return self.mapper.generate(controller='upnp', action=action, udn=self.udn, sid=sid)
 
     def make_location(self, ip, port_num):
-        return 'http://%s:%d%s' % (ip, port_num, self.make_upnp_path())
+        return 'http://%s:%i%s' % (ip, port_num, self.make_upnp_path())
 
     def make_notify_packets(self, host, ip, port_num, nts):
         types = ['upnp:rootdevice', self.udn, self.deviceType]
@@ -364,7 +370,7 @@ class UpnpDevice(object):
             for nt in types:
                 packet = [
                     ('HOST', host),
-                    ('CACHE-CONTROL', 'max-age=%d' % self.max_age),
+                    ('CACHE-CONTROL', 'max-age=%i' % self.max_age),
                     ('LOCATION', self.make_location(ip, port_num)),
                     ('NT', nt),
                     ('NTS', nts),
@@ -403,7 +409,7 @@ class UpnpDevice(object):
             if usn != '':
                 usn = '::' + usn
             packet = [
-                ('CACHE-CONTROL', 'max-age=%d' % self.max_age),
+                ('CACHE-CONTROL', 'max-age=%i' % self.max_age),
                 ('EXT', ''),
                 ('LOCATION', self.make_location(addr, port)),
                 ('SERVER', self.server_name),
@@ -863,7 +869,7 @@ class FileContent(object):
             last = length - 1
         self.seek(first)
         self.last = last
-        return '%d-%d/%d' % (first, last, length)
+        return '%i-%i/%i' % (first, last, length)
 
     def get_type(self):
         return 'application/octet-stream'
@@ -878,6 +884,12 @@ class FileContent(object):
 class StreamingServer(object):
     def __init__(self, name):
         self.name = name
+
+    def byte_seek(self, environ, headers, content):
+        return '200 OK'
+
+    def time_seek(self, environ, headers, content):
+        return '200 OK'
 
     def __call__(self, environ, start_response):
         # response values
@@ -902,23 +914,106 @@ class StreamingServer(object):
             if method == 'GET':
                 body = content
 
-                # Byte seek
-                if 'HTTP_RANGE' in environ:
-                    code = '206 Partial Content'
-                    try:
-                        fbp, lbp = environ['HTTP_RANGE'].split()[0].split('=')[1].split('-')
-                        lbp = -1 if lbp == '' else int(lbp)
-                        content_range = 'bytes ' + content.set_range(int(fbp), lbp)
-                        headers.append(('Content-Range', content_range))
-                    except (IOError, ValueError):
-                        code = '416 Requested Range Not Satisfiable'
-                        body = []
+                # seek
+                try:
+                    if 'HTTP_RANGE' in environ:
+                        code = self.byte_seek(environ, headers, content)
+                    elif 'HTTP_TIMESEEKRANGE.DLNA.ORG' in environ:
+                        code = self.time_seek(environ, headers, content)
+                except (IOError, ValueError):
+                    code = '416 Requested Range Not Satisfiable'
+                    body = []
 
         start_response(code, headers)
         return body
 
     def get_content(self, id, environ):
-        return Content(id)
+        return FileContent(id)
+
+
+class ByteSeekMixin(object):
+    def byte_seek(self, environ, headers, content):
+        fbp, lbp = environ['HTTP_RANGE'].split()[0].split('=')[1].split('-')
+        lbp = -1 if lbp == '' else int(lbp)
+        content_range = content.set_range(int(fbp), lbp)
+
+        # append response headers
+        headers.append(('Content-Range', 'bytes %s' % content_range))
+
+        return '206 Partial Content'
+
+
+class TimeSeekMixin(object):
+    def time_seek(self, environ, headers, content):
+        npt_time = environ.get('HTTP_TIMESEEKRANGE.DLNA.ORG', '')
+        if not npt_time.startswith('npt='):
+            return '200 OK'
+
+        # first and last npt-time
+        first, last = npt_time[4:].split('-', 1)
+
+        # retrieve the duration
+        req = webob.Request(environ)
+        duration = req.GET['duration']
+        del req
+
+        # this mixin requires a duration in the query string
+        if not duration:
+            return '200 OK'
+        duration = parse_npt(duration)
+
+        # calculate each position
+        length = content.length(0)
+        first = int(length * parse_npt(first) / duration)
+        last = int(length * parse_npt(last) / duration) if last else -1
+
+        bytes_range = content.set_range(first, last)
+        npt_range = '%i-%i/%i' % [to_npt(x) for x in (first, last, length)]
+
+        # append response headers
+        headers.append(
+            ('TimeSeekRange.dlna.org', 'npt=%s bytes=%s' % (npt_range, bytes_range)),
+        )
+
+        return '206 Partial Content'
+
+
+nptsecref = re.compile('^(?:\d+)(?:.(?:\d{1,3}))?$')
+npthmsref = re.compile('^(?P<hour>\d+):(?P<min>\d{2,2}):(?P<sec>\d{2,2})(?:.(?P<msec>\d{1,3}))?$')
+
+
+def parse_npt(npt_time):
+    # S+(.sss)
+    m = nptsecref.match(npt_time)
+    if m:
+        return float(npt_time)
+
+    # H+:MM:SS(.sss) 
+    m = npthmsref.match(npt_time)
+    if not m:
+        raise ValueError('invalid npt-time: %s' % npt_time)
+
+    hour = int(m.group('hour'))
+    min = int(m.group('min'))
+    sec = int(m.group('sec'))
+
+    if not ((0 <= min <= 59) and (0 <= sec <= 59)):
+        raise ValueError('invalid npt-time: %s' % npt_time)
+
+    sec = float((hour * 60 + min) * 60) + sec
+
+    msec = m.group('msec')
+    if msec:
+        sec += float('0.' + msec)
+
+    return sec
+
+
+def to_npt(sec):
+    hour = int(sec / 3600)
+    min = int((int(sec) % 3600) / 60)
+    sec = (int(sec) % 60) + (sec - int(sec))
+    return '%i:%02i:%06.3f' % (hour, min, sec)
 
 
 def _test():
