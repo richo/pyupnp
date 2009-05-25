@@ -963,12 +963,14 @@ class TimeSeekMixin(object):
         duration = parse_npt(duration)
 
         # calculate each position
+        first = parse_npt(first)
+        last = parse_npt(last) if last else duration
         length = content.length(0)
-        first = int(length * parse_npt(first) / duration)
-        last = int(length * parse_npt(last) / duration) if last else -1
+        fbp = int(length * first / duration)
+        lbp = int(length * last / duration) if last else -1
 
-        bytes_range = content.set_range(first, last)
-        npt_range = '%i-%i/%i' % [to_npt(x) for x in (first, last, length)]
+        bytes_range = content.set_range(fbp, lbp)
+        npt_range = '%s-%s/%s' % tuple(map(to_npt, [first, last, duration]))
 
         # append response headers
         headers.append(
