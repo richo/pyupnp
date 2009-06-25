@@ -399,8 +399,180 @@ def test_parse_npt():
             print result, tmp
             assert expected == parse_npt(tmp)
         except Exception, e:
-            #print npt_time, e
+            print npt_time, e
             assert exc == e.__class__
+
+
+def test_parse_duration():
+    testcase = [
+        # H+:MM:SS
+        ('0:00:00', 0, None),
+        ('0:00:01', 1, None),
+        ('0:00:10', 10, None),
+        ('0:00:59', 59, None),
+        ('0:00:60', None, ValueError),
+        ('0:01:00', 60, None),
+        ('0:10:00', 10 * 60, None),
+        ('0:59:00', 59 * 60, None),
+        ('0:60:00', None, ValueError),
+        ('0:60:60', None, ValueError),
+        ('1:00:00', 3600, None),
+        ('1:01:00', 3600 + 60, None),
+        ('1:01:01', 3600 + 61, None),
+        ('10:00:00', 3600 * 10, None),
+        ('100:00:00', 3600 * 100, None),
+        ('1000:00:00', 3600 * 1000, None),
+        ('10000:00:00', 3600 * 10000, None),
+        ('100000:00:00', 3600 * 100000, None),
+        ('1000000:00:00', 3600 * 1000000, None),
+        ('10000000:00:00', 3600 * 10000000, None),
+        ('100000000:00:00', 3600 * 100000000, None),
+        ('1000000000:00:00', 3600 * 1000000000, None),
+        ('10000000000:00:00', 3600 * 10000000000, None),
+        ('100000000000:00:00', 3600 * 100000000000, None),
+        ('1000000000000:00:00', 3600 * 1000000000000, None),
+        ('10000000000000:00:00', 3600 * 10000000000000, None),
+        # H+:MM:SS.s
+        ('0:00:00.0', 0, None),
+        ('0:00:00.1', 0.1, None),
+        ('0:00:00.9', 0.9, None),
+        ('0:00:01.0', 1, None),
+        ('0:00:01.1', 1.1, None),
+        ('0:01:00.0', 60, None),
+        ('0:01:01.1', 61.1, None),
+        ('1:00:00.0', 3600, None),
+        ('1:01:00.0', 3600 + 60, None),
+        ('1:01:01.0', 3600 + 61, None),
+        ('1:01:01.1', 3600 + 61.1, None),
+        ('0:00:60.0', None, ValueError),
+        ('0:60:00.0', None, ValueError),
+        ('0:60:60.0', None, ValueError),
+        # H+:MM:SS.ss
+        ('0:00:00.00', 0.00, None),
+        ('0:00:00.01', 0.01, None),
+        ('0:00:00.10', 0.10, None),
+        ('0:00:00.99', 0.99, None),
+        ('0:00:01.00', 1, None),
+        ('0:00:01.01', 1.01, None),
+        ('0:01:00.00', 60, None),
+        ('0:01:01.01', 61.01, None),
+        ('1:00:00.00', 3600, None),
+        ('1:01:00.00', 3600 + 60, None),
+        ('1:01:01.00', 3600 + 61, None),
+        ('1:01:01.01', 3600 + 61.01, None),
+        ('0:00:60.00', None, ValueError),
+        ('0:60:00.00', None, ValueError),
+        ('0:60:60.00', None, ValueError),
+        # H+:MM:SS.sss
+        ('0:00:00.000', 0.000, None),
+        ('0:00:00.001', 0.001, None),
+        ('0:00:00.010', 0.010, None),
+        ('0:00:00.100', 0.100, None),
+        ('0:00:00.999', 0.999, None),
+        ('0:00:01.000', 1, None),
+        ('0:00:01.001', 1.001, None),
+        ('0:01:00.000', 60, None),
+        ('0:01:01.000', 61, None),
+        ('0:01:01.001', 61.001, None),
+        ('1:00:00.000', 3600, None),
+        ('1:01:00.000', 3600 + 60, None),
+        ('1:01:01.000', 3600 + 61, None),
+        ('1:01:01.001', 3600 + 61.001, None),
+        ('0:00:60.001', None, ValueError),
+        ('0:60:00.001', None, ValueError),
+        ('0:60:60.001', None, ValueError),
+        # H+:MM:SS.F0+
+        ('0:00:00.1000', 0.1, None),
+        ('0:00:00.10000', 0.1, None),
+        ('0:00:00.100000', 0.1, None),
+        ('0:00:00.1000000', 0.1, None),
+        ('0:00:00.10000000', 0.1, None),
+        ('0:00:00.100000000', 0.1, None),
+        # H+:MM:SS.F0/F1
+        ('0:00:00.0/1', 0, None),
+        ('0:00:00.0/10', 0, None),
+        ('0:00:00.0/100', 0, None),
+        ('0:00:00.0/1000', 0, None),
+        ('0:00:00.1/2', 1.0 / 2.0, None),
+        ('0:00:00.1/10', 1.0 / 10.0, None),
+        ('0:00:00.10/11', 10.0 / 11.0, None),
+        ('0:00:00.10/100', 10.0 / 100.0, None),
+        ('0:00:00.100/101', 100.0 / 101.0, None),
+        ('0:00:00.100/1000', 100.0 / 1000.0, None),
+        ('0:00:00.1000/1001', 1000.0 / 1001.0, None),
+        ('0:00:00.1000/10000', 1000.0 / 10000.0, None),
+        ('0:00:00.0/0', None, ValueError),
+        ('0:00:00.1/0', None, ValueError),
+        ('0:00:00.1/1', None, ValueError),
+        ('0:00:00.2/1', None, ValueError),
+        ('0:00:01.0/1', 1, None),
+        ('0:01:00.0/1', 60, None),
+        ('0:01:01.0/1', 61, None),
+        ('1:00:00.0/1', 3600, None),
+        ('1:00:01.0/1', 3600 + 1, None),
+        ('1:01:00.0/1', 3600 + 60, None),
+        ('1:01:01.0/1', 3600 + 61, None),
+        # Errors
+        ('x0:00:00', None, ValueError),
+        ('x', None, ValueError),
+        ('x.xxx', None, ValueError),
+        ('x:xx:xx', None, ValueError),
+        ('x:xx:xx.xxx', None, ValueError),
+        ('x:xx:xx.x/y', None, ValueError),
+        ('x0', None, ValueError),
+        ('0x', None, ValueError),
+        ('0x0', None, ValueError),
+        ('0.xxx', None, ValueError),
+        ('0.0x0', None, ValueError),
+        ('x:00:00', None, ValueError),
+        ('0:xx:00', None, ValueError),
+        ('0:00:xx', None, ValueError),
+        ('x:00:00.000', None, ValueError),
+        ('0:xx:00.000', None, ValueError),
+        ('0:00:xx.000', None, ValueError),
+        ('0:00:00.xxx', None, ValueError),
+        ('0:00:00.x/1', None, ValueError),
+        ('0:00:00.0/y', None, ValueError),
+        ('0:00:00.x/y', None, ValueError),
+        ('0x:00:00.000', None, ValueError),
+        ('0:0x:00.000', None, ValueError),
+        ('0:00:0x.000', None, ValueError),
+        ('0:00:00.00x', None, ValueError),
+        ('0:00:00.0x/1', None, ValueError),
+        ('0:00:00.0/1x', None, ValueError),
+    ]
+
+    for _duration, _expected, exc in testcase:
+        for prefix, a in (('', 1), ('+', 1), ('-', -1)):
+            # parse_duration check
+            try:
+                duration = prefix + _duration
+                result = parse_duration(duration)
+                expected = a * _expected
+                assert expected == result
+            except Exception, e:
+                print duration, e
+                assert exc == e.__class__
+                continue
+
+            # turnaround check
+            result = parse_duration(duration)
+            tmp = to_duration(result)
+            print duration, result, tmp
+            parts = duration.split('.')
+            if len(parts) == 1:
+                assert expected == parse_duration(tmp)
+            elif len(parts) == 2:
+                sec = parse_duration(tmp)
+                assert int(expected) == int(sec)
+                if '/' in parts[1]:
+                    F0, F1 = parts[1].split('/')
+                    msec = float(F0) / float(F1)
+                else:
+                    msec = float('0.' + parts[1])
+                assert (expected - int(expected) - msec) < 0.001
+            else:
+                assert False
 
 
 class ContentStub(object):
@@ -422,7 +594,7 @@ class ContentStub(object):
             yield "".join(['%i' % ((x + n) % 10) for x in xrange(self.chunk_size)])
             n = (n + self.chunk_size) % 10
         yield "".join(['%i' % ((x + n) % 10) for x in xrange(extra)])
-    
+
     def length(self, whence=1):
         if whence == 0:
             return self.size

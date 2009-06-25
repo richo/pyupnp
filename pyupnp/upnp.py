@@ -69,6 +69,8 @@ __all__ = [
     'TimeSeekMixin',
     'parse_npt',
     'to_npt',
+    'parse_duration',
+    'to_duration',
 ]
 
 
@@ -677,7 +679,7 @@ class UpnpBase(object):
                 return args[3]
         except Exception, e:
             #print e
-            #print 'Unknown access: ' + environ['PATH_INFO'] 
+            #print 'Unknown access: ' + environ['PATH_INFO']
             return not_found(environ, start_response)
 
     def _call_handler(self, args):
@@ -985,12 +987,16 @@ npthmsref = re.compile('^(?P<hour>\d+):(?P<min>\d{2,2}):(?P<sec>\d{2,2})(?:.(?P<
 
 
 def parse_npt(npt_time):
+    """ Parse npt time formatted string and return in second.
+        S+(.sss)
+        H+:MM:SS(.sss)
+    """
     # S+(.sss)
     m = nptsecref.match(npt_time)
     if m:
         return float(npt_time)
 
-    # H+:MM:SS(.sss) 
+    # H+:MM:SS(.sss)
     m = npthmsref.match(npt_time)
     if not m:
         raise ValueError('invalid npt-time: %s' % npt_time)
@@ -1016,6 +1022,54 @@ def to_npt(sec):
     min = int((int(sec) % 3600) / 60)
     sec = (int(sec) % 60) + (sec - int(sec))
     return '%i:%02i:%06.3f' % (hour, min, sec)
+
+
+durationref = re.compile("""^[+-]?
+                            (?P<hour>\d+):
+                            (?P<minute>\d{2,2}):
+                            (?P<second>\d{2,2})
+                            (.(?P<msec>\d+)|.(?P<F0>\d+)/(?P<F1>\d+))?$""",
+                         re.VERBOSE)
+
+
+def parse_duration(text):
+    """ Parse duration formatted string and return in second.
+        ['+'|'-']H+:MM:SS[.F0+|.F0/F1]
+    """
+    m = durationref.match(text)
+    if m == None:
+        raise ValueError('invalid format')
+
+    hour = int(m.group('hour'))
+    minute = int(m.group('minute'))
+    second = int(m.group('second'))
+    if minute >= 60 or second >= 60:
+        raise ValueError('invalid format')
+
+    msec = m.group('msec')
+    if msec:
+        msec = float('0.' + msec)
+    else:
+        F1 = m.group('F1')
+        if F1:
+            F1 = float(F1)
+            if F1 == 0:
+                raise ValueError('invalid format')
+            F0 = float(m.group('F0'))
+            if F0 >= F1:
+                raise ValueError('invalid format')
+            msec = F0 / F1
+        else:
+            msec = 0
+
+    a = text[0] == '-' and -1 or 1
+    return a * (((hour * 60 + minute) * 60) + second + msec)
+
+
+def to_duration(sec):
+    if sec < 0.0:
+        return '-' + to_npt(abs(sec))
+    return to_npt(sec)
 
 
 def _test():
@@ -1061,7 +1115,7 @@ if __name__ == '__main__':
     base = UpnpBase()
     base.append_device([device])
     base.start(reactor)
-    
+
     def stop():
         base.remove_device(device.udn)
         base.stop()
