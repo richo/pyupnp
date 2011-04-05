@@ -114,7 +114,7 @@ class MediaServer(object):
         if id == '0':
             id = self.content_dir
         else:
-            id = os.path.normpath(os.path.join(self.content_dir, '.' + id))
+            id = os.path.normpath(os.path.join(self.content_dir, id))
 
         if not os.path.exists(id) or not id.startswith(self.content_dir):
             return upnp.SoapError(701, 'No such object')
@@ -218,7 +218,7 @@ class StreamingServer(upnp.ByteSeekMixin, upnp.TimeSeekMixin, upnp.StreamingServ
         self.content_dir = unicode(content_dir)
 
     def get_content(self, id, environ):
-        return File(os.path.join(self.content_dir, '.' + id))
+        return File(os.path.join(self.content_dir, id))
 
 
 if __name__ == '__main__':

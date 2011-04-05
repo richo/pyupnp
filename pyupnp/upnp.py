@@ -358,7 +358,10 @@ class UpnpDevice(object):
             self.serviceTypes.append(serviceType)
 
     def make_upnp_path(self, sid=None, action='desc'):
-        return self.mapper.generate(controller='upnp', action=action, udn=self.udn, sid=sid)
+        kwargs = {'controller': 'upnp', 'action': action, 'udn': self.udn}
+        if sid != None:
+          kwargs['sid'] = sid
+        return self.mapper.generate(**kwargs)
 
     def make_location(self, ip, port_num):
         return 'http://%s:%i%s' % (ip, port_num, self.make_upnp_path())
@@ -423,10 +426,11 @@ class UpnpDevice(object):
         return packets
 
     def __call__(self, environ, start_response):
+        print environ
         rargs = environ['wsgiorg.routing_args'][1]
-        udn = rargs['udn']
-        action = rargs['action']
-        sid = rargs['sid']
+        udn = rargs.get('udn', None)
+        action = rargs.get('action', None)
+        sid = rargs.get('sid', None)
         method = environ['REQUEST_METHOD']
 
         body = 'Not Found'
@@ -535,8 +539,9 @@ class UpnpBase(object):
     @staticmethod
     def make_mapper():
         m = Mapper()
-        m.connect('mt/:name/*id', controller='mt', action='get')
-        m.connect('upnp/:udn/:sid/:action', controller='upnp', action='desc', sid=None)
+        m.connect(None, '/mt/{name}/{id:.*?}', controller='mt', action='get')
+        m.connect(None, '/upnp/{udn}/{sid}/{action}', controller='upnp', action='desc')
+        m.connect(None, '/upnp/{udn}/desc', controller='upnp', action='desc')
         return m
 
     def make_mt_path(self, name, id):
